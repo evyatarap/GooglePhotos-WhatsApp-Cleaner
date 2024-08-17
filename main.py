@@ -1,11 +1,65 @@
 import os
+import re
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from datetime import datetime, timezone, timedelta
 
 # If modifying these SCOPES, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly']
+
+def print_albums(albums):
+    if not albums:
+        print('No albums found.')
+    else:
+        print('Albums:')
+        for album in albums:
+            print(f'Album: {album["title"]}, id: {album["id"]}')
+
+def is_valid_whatsapp_photo_or_video_filename(filename):
+    pattern = r'^(IMG-\d{8}-WA\d{4}\.jpg|VID-\d{8}-WA\d{4}\.mp4)$'
+    return re.match(pattern, filename) is not None
+
+def get_albums(service):
+    results = service.albums().list(
+        pageSize=50, fields="nextPageToken,albums(id,title)").execute()
+    items = results.get('albums', [])
+    return items
+
+def get_photos_by_date(service, start_date, end_date, nextPageToken=None):
+
+    # Create the date range filter
+    date_range_filter = {
+        "dateFilter": {
+            "ranges": [
+                {
+                    "startDate": {
+                        "year": start_date.year,
+                        "month": start_date.month,
+                        "day": start_date.day
+                    },
+                    "endDate": {
+                        "year": end_date.year,
+                        "month": end_date.month,
+                        "day": end_date.day
+                    }
+                }
+            ]
+        }
+    }
+    
+
+    results = service.mediaItems().search(
+        body={
+            "filters": date_range_filter,
+            "pageSize": 50,
+            "pageToken": nextPageToken
+        }
+    ).execute()
+
+    items = results.get('mediaItems', [])
+    return [items, results.get('nextPageToken', None)]
 
 def main():
     """Shows basic usage of the Google Photos API."""
@@ -34,16 +88,29 @@ def main():
     service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
 
     # Call the Photos API
-    results = service.albums().list(
-        pageSize=10, fields="nextPageToken,albums(id,title)").execute()
-    items = results.get('albums', [])
 
-    if not items:
-        print('No albums found.')
-    else:
-        print('Albums:')
-        for item in items:
-            print('{0} ({1})'.format(item['title'], item['id']))
+    albums = get_albums(service)
+    
+    # Get photos from the last week
+    end_date = datetime.now(timezone.utc)
+    start_date = end_date - timedelta(days=365)
+
+    whatsapp_photos = []
+
+    nextPageToken = None
+    total_photos = 0
+    while True:
+        [photos, nextPageToken] = get_photos_by_date(service, start_date, end_date, nextPageToken)
+        total_photos += len(photos)
+        for photo in photos:
+            if is_valid_whatsapp_photo_or_video_filename(photo['filename']):
+                whatsapp_photos.append(photo)
+            #print('FileName: {0}'.format(photo['filename']))
+        print("Scanned {0} photos.".format(total_photos))
+        if not nextPageToken:
+            break
+
+    print('Found {0} WhatsApp photos from total {1} photos.'.format(len(whatsapp_photos), total_photos))
 
 if __name__ == '__main__':
     main()
