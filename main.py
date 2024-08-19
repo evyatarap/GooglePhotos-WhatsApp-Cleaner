@@ -7,7 +7,7 @@ from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 
 # If modifying these SCOPES, delete the file token.json.
-SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly']
+SCOPES = ['https://www.googleapis.com/auth/photoslibrary']
 
 def print_albums(albums):
     if not albums:
@@ -16,6 +16,26 @@ def print_albums(albums):
         print('Albums:')
         for album in albums:
             print(f'Album: {album["title"]}, id: {album["id"]}')
+
+def create_album(service, album_title):
+    album_body = {
+        'album': {'title': album_title}
+    }
+    created_album = service.albums().create(body=album_body).execute()
+    return created_album
+
+def split_into_batches(media_items, batch_size):
+    for i in range(0, len(media_items), batch_size):
+        yield media_items[i:i + batch_size]
+
+def add_media_items_to_album(service, album_id, media_item_ids):
+    batch_size = 50
+    for batch in split_into_batches(media_item_ids, batch_size):
+        body = {
+            'mediaItemIds': batch
+        }
+        response = service.albums().batchAddMediaItems(albumId=album_id, body=body).execute()
+    return response
 
 def is_valid_whatsapp_photo_or_video_filename(filename):
     pattern = r'^(IMG-\d{8}-WA\d{4}\.jpg|VID-\d{8}-WA\d{4}\.mp4)$'
@@ -53,7 +73,7 @@ def get_photos_by_date(service, start_date, end_date, nextPageToken=None):
     results = service.mediaItems().search(
         body={
             "filters": date_range_filter,
-            "pageSize": 50,
+            "pageSize": 100,
             "pageToken": nextPageToken
         }
     ).execute()
@@ -91,26 +111,39 @@ def main():
 
     albums = get_albums(service)
     
-    # Get photos from the last week
+    # Get a specific period of time
     end_date = datetime.now(timezone.utc)
-    start_date = end_date - timedelta(days=365)
+    start_date = end_date - timedelta(days=365*2)
 
-    whatsapp_photos = []
 
+    # Scan all media items between the start and end date and filter out WhatsApp media items
+    whatsapp_media_items = []
     nextPageToken = None
-    total_photos = 0
+    total_media_items = 0
     while True:
         [photos, nextPageToken] = get_photos_by_date(service, start_date, end_date, nextPageToken)
-        total_photos += len(photos)
+        total_media_items += len(photos)
         for photo in photos:
             if is_valid_whatsapp_photo_or_video_filename(photo['filename']):
-                whatsapp_photos.append(photo)
+                whatsapp_media_items.append(photo)
             #print('FileName: {0}'.format(photo['filename']))
-        print("Scanned {0} photos.".format(total_photos))
+        print("Scanned {0} photos, found {1} whatsApp.".format(total_media_items, len(whatsapp_media_items)))
         if not nextPageToken:
             break
+    
+    print('Found {0} WhatsApp photos from total {1} photos.'.format(len(whatsapp_media_items), total_media_items))
 
-    print('Found {0} WhatsApp photos from total {1} photos.'.format(len(whatsapp_photos), total_photos))
+    # Create a new album
+    album_title = "WhatsApp-Media-Items"
+    wa_media_album = create_album(service, album_title)
+    print(f"Created album: {wa_media_album['title']} (ID: {wa_media_album['id']})")
+
+    # Add WhatsApp media items to the new album
+    media_item_ids = [media_item['id'] for media_item in whatsapp_media_items]
+    add_media_items_to_album(service, wa_media_album['id'], media_item_ids)
+    
+
+
 
 if __name__ == '__main__':
     main()
